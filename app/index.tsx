@@ -1,41 +1,122 @@
-import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
+
+const API_URL = 'http://localhost:5000/api/v1'; // Replace with your backend URL
+
+export const TokenService = {
+  save: async (access: string, refresh: string) => {
+    await SecureStore.setItemAsync('accessToken', access);
+    await SecureStore.setItemAsync('refreshToken', refresh);
+  },
+  getAccess: () => SecureStore.getItemAsync('accessToken'),
+  getRefresh: () => SecureStore.getItemAsync('refreshToken'),
+  clear: async () => {
+    await SecureStore.deleteItemAsync('accessToken');
+    await SecureStore.deleteItemAsync('refreshToken');
+  },
+};
 
 export default function AuthScreen() {
   const router = useRouter();
-  const [isLogin, setIsLogin] = useState(true);
-  
-  // States to hold the user input
-  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(true); // true on mount to check tokens
+  const [error, setError] = useState('');
 
-  const handleAuth = () => {
-    // Later, this is where we will send the data to your Node.js backend
-    console.log(isLogin ? "Attempting Login..." : "Attempting Signup...");
-    if (!isLogin) console.log("Username:", username);
-    console.log("Email:", email);
-    console.log("Password:", password);
-    
-    // For now, bypass real authentication and just navigate to the 1st page
-    router.replace('/home');
+  // On app start: validate existing tokens
+  useEffect(() => {
+    checkExistingTokens();
+  }, []);
+
+  const checkExistingTokens = async () => {
+    try {
+      const accessToken = await TokenService.getAccess();
+      const refreshToken = await TokenService.getRefresh();
+
+      if (!accessToken || !refreshToken) {
+        setLoading(false);
+        return;
+      }
+
+      // Send both tokens to backend for validation
+      const res = await fetch(`${API_URL}/user/verifyJwt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accessToken,refreshToken }),
+      });
+
+      const resp = await res.json();
+      const data=resp.data;
+
+      if (res.ok) {
+        // If backend returns new tokens, save them
+        if (data.accessToken && data.refreshToken) {
+          await TokenService.save(data.accessToken, data.refreshToken);
+        }
+        router.replace('/home');
+      } else {
+        // Tokens invalid — clear them, show login
+        await TokenService.clear();
+        setLoading(false);
+      }
+    } catch {
+      // Network error or unexpected failure — just show login
+      setLoading(false);
+    }
   };
+
+  const handleLogin = async () => {
+    if (!email || !password) {
+      setError('Please enter email and password.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const res = await fetch(`${API_URL}/user/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const resp = await res.json();
+      const data=resp.data;
+      console.log(data);
+      
+
+      if (res.ok && data.data.accessToken && data.data.refreshToken) {
+        console.log("fff");
+        await TokenService.save(data.accessToken, data.refreshToken);
+        
+        router.replace('/home');
+      } else {
+        setError(data.message || 'Login failed. Please try again.');
+      }
+    } catch {
+      setError('Network error. Please check your connection.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color="#000" />
+        <Text style={styles.loadingText}>Checking session...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>{isLogin ? 'Login' : 'Sign Up'}</Text>
+      <Text style={styles.title}>Login</Text>
 
-      {/* Only show the Username input if the user is on the Sign Up view */}
-      {!isLogin && (
-        <TextInput
-          style={styles.input}
-          placeholder="Username"
-          value={username}
-          onChangeText={setUsername}
-          autoCapitalize="none"
-        />
-      )}
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
       <TextInput
         style={styles.input}
@@ -54,14 +135,8 @@ export default function AuthScreen() {
         secureTextEntry
       />
 
-      <TouchableOpacity style={styles.mainButton} onPress={handleAuth}>
-        <Text style={styles.mainButtonText}>{isLogin ? 'Login' : 'Sign Up'}</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity onPress={() => setIsLogin(!isLogin)}>
-        <Text style={styles.toggleText}>
-          {isLogin ? "Don't have an account? Sign Up" : "Already have an account? Login"}
-        </Text>
+      <TouchableOpacity style={styles.mainButton} onPress={handleLogin} disabled={loading}>
+        <Text style={styles.mainButtonText}>Login</Text>
       </TouchableOpacity>
     </View>
   );
@@ -74,6 +149,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#fff',
     padding: 20,
+  },
+  centered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#888',
   },
   title: {
     fontSize: 32,
@@ -102,9 +188,10 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
   },
-  toggleText: {
-    marginTop: 20,
-    color: '#007BFF',
-    fontSize: 16,
+  errorText: {
+    color: 'red',
+    marginBottom: 15,
+    fontSize: 14,
+    textAlign: 'center',
   },
 });

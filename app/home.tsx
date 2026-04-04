@@ -1,22 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useRouter } from "expo-router";
 import { Button, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { usePatientStore } from "@/store/patientStore"; // adjust path as needed
 
 export default function Home() {
   const router = useRouter();
-  const params = useLocalSearchParams();
-  const [patientName, setPatientName] = useState("");
-
-  useEffect(() => {
-    if (params.name) {
-      setPatientName(params.name);
-    }
-  }, [params.name]);
-
-  const handleReset = () => {
-    setPatientName("");
-  };
+  const { patient, clearPatient } = usePatientStore();
 
   return (
     <View style={styles.container}>
@@ -26,19 +15,16 @@ export default function Home() {
         </TouchableOpacity>
       </View>
       <View style={styles.content}>
-        {patientName ? (
-          <Text style={styles.patientText}>Active Patient: {patientName}</Text>
+        {patient.name ? (
+          <Text style={styles.patientText}>Active Patient: {patient.name}</Text>
         ) : null}
 
         <View style={styles.buttonWrapper}>
-          <Button
-            title="Add Patient"
-            onPress={() => router.push("/add-patient")}
-          />
+          <Button title="Add Patient" onPress={() => router.push("/add-patient")} />
         </View>
 
         <View style={styles.buttonWrapper}>
-          <Button title="Reset Patient" onPress={handleReset} color="#d9534f" />
+          <Button title="Reset Patient" onPress={clearPatient} color="#d9534f" />
         </View>
 
         <View style={styles.buttonWrapper}>

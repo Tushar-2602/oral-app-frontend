@@ -1,7 +1,9 @@
 import * as ImageManipulator from "expo-image-manipulator";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
+import * as FileSystem from "expo-file-system";
 import {
+  Alert,
   Image,
   PanResponder,
   StyleSheet,
@@ -10,12 +12,17 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { usePatientStore } from "@/store/patientStore"; // adjust path as needed
+import { TokenService } from ".";
 
 export default function ThirdScreen() {
   const { uri } = useLocalSearchParams();
   const router = useRouter();
   const [description, setDescription] = useState("");
   const [displayUri, setDisplayUri] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const { patient } = usePatientStore();
 
   const [cropX, setCropX] = useState(0);
   const [cropY, setCropY] = useState(0);
@@ -39,32 +46,20 @@ export default function ThirdScreen() {
         const minSize = 50;
 
         if (edge === "top") {
-          const newY = Math.max(
-            0,
-            Math.min(y + gestureState.dy, y + h - minSize),
-          );
+          const newY = Math.max(0, Math.min(y + gestureState.dy, y + h - minSize));
           const diff = newY - y;
           setCropY(newY);
           setCropHeight(h - diff);
         } else if (edge === "bottom") {
-          const newH = Math.max(
-            minSize,
-            Math.min(h + gestureState.dy, 300 - y),
-          );
+          const newH = Math.max(minSize, Math.min(h + gestureState.dy, 300 - y));
           setCropHeight(newH);
         } else if (edge === "left") {
-          const newX = Math.max(
-            0,
-            Math.min(x + gestureState.dx, x + w - minSize),
-          );
+          const newX = Math.max(0, Math.min(x + gestureState.dx, x + w - minSize));
           const diff = newX - x;
           setCropX(newX);
           setCropWidth(w - diff);
         } else if (edge === "right") {
-          const newW = Math.max(
-            minSize,
-            Math.min(w + gestureState.dx, 300 - x),
-          );
+          const newW = Math.max(minSize, Math.min(w + gestureState.dx, 300 - x));
           setCropWidth(newW);
         }
       },
@@ -112,9 +107,85 @@ export default function ThirdScreen() {
     });
   };
 
-  const handleUpload = () => {
-    console.log(displayUri);
-    console.log(description);
+ const handleUpload = async () => {
+    if (!displayUri) {
+      Alert.alert("Error", "No image to upload.");
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const accessToken = await TokenService.getAccess();
+      const refreshToken = await TokenService.getRefresh();
+
+      const fileName = displayUri.split("/").pop() ?? `image_${Date.now()}.jpg`;
+      const fileType = "image/jpeg";
+
+      const fileInfo = await FileSystem.getInfoAsync(displayUri);
+      const size = fileInfo.exists ? fileInfo.size ?? 0 : 0;
+
+      const backendResponse = await fetch("http://localhost:5000/api/v1/content/uploadRequest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileName,
+          fileType,
+          userId: patient.patientId,
+          patientName: patient.name,
+          patientAge: patient.age,
+          patientId: patient.patientId,
+          patientDescription: description,
+          patientQrData: patient.qrData,
+          size,
+          accessToken,   // ← sending tokens
+          refreshToken,
+        }),
+      });
+
+      if (!backendResponse.ok) {
+        throw new Error(`Backend error: ${backendResponse.status}`);
+      }
+
+      const resp = await backendResponse.json();
+      const data=resp.data;
+
+      // Save new tokens if backend rotated them
+      if (data.newAccessToken && data.newRefreshToken) {
+        await TokenService.save(data.newAccessToken, data.newRefreshToken);
+      }
+
+      const { uploadUrl, fields } = data;
+
+      const formData = new FormData();
+      if (fields) {
+        Object.entries(fields).forEach(([key, value]) => {
+          formData.append(key, value as string);
+        });
+      }
+
+      formData.append("file", {
+        uri: displayUri,
+        name: fileName,
+        type: fileType,
+      } as any);
+
+      const s3Response = await fetch(uploadUrl, {
+        method: "POST",
+        body: formData,
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      if (!s3Response.ok) {
+        throw new Error(`S3 upload failed: ${s3Response.status}`);
+      }
+
+      Alert.alert("Success", "Uploaded successfully!");
+    } catch (error: any) {
+      console.error("Upload error:", error);
+      Alert.alert("Error", error.message ?? "Upload failed. Please try again.");
+    } finally {
+      setUploading(false);
+    }
   };
 
   return (
@@ -149,8 +220,12 @@ export default function ThirdScreen() {
         multiline
       />
 
-      <TouchableOpacity style={styles.uploadButton} onPress={handleUpload}>
-        <Text style={styles.buttonText}>Upload</Text>
+      <TouchableOpacity
+        style={[styles.uploadButton, uploading && { opacity: 0.6 }]}
+        onPress={handleUpload}
+        disabled={uploading}
+      >
+        <Text style={styles.buttonText}>{uploading ? "Uploading..." : "Upload"}</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
