@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Button, PanResponder, Dimensions } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useRouter } from 'expo-router';
 import * as ImageManipulator from 'expo-image-manipulator';
+import { useRouter } from 'expo-router';
+import { useRef, useState } from 'react';
+import { Button, Dimensions, PanResponder, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -18,7 +18,6 @@ export default function CameraScreen() {
   const [boxSize, setBoxSize] = useState(280);
   const initBoxSize = useRef(280);
 
-  // Pinch-to-resize via two-corner drag handle
   const resizePan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -26,7 +25,6 @@ export default function CameraScreen() {
         initBoxSize.current = boxSize;
       },
       onPanResponderMove: (_, g) => {
-        // drag right/down = bigger, left/up = smaller
         const delta = (g.dx + g.dy) / 2;
         const newSize = Math.min(MAX_BOX, Math.max(MIN_BOX, initBoxSize.current + delta));
         setBoxSize(newSize);
@@ -50,23 +48,39 @@ export default function CameraScreen() {
       const photo = await cameraRef.current.takePictureAsync({ skipProcessing: true });
       if (!photo?.uri) return;
 
-      // Focus box is centered on screen
+      // Use the larger dimension as "height" to handle portrait photos correctly
+      // On Android with skipProcessing, width/height may be swapped relative to display
+      const photoLongSide = Math.max(photo.width, photo.height);
+      const photoShortSide = Math.min(photo.width, photo.height);
+
+      // Map screen dimensions to photo dimensions
+      // Screen is portrait: short side = width, long side = height
+      const scaleX = photoShortSide / SCREEN_WIDTH;
+      const scaleY = photoLongSide / SCREEN_HEIGHT;
+
       const boxLeft = (SCREEN_WIDTH - boxSize) / 2;
       const boxTop = (SCREEN_HEIGHT - boxSize) / 2;
 
-      // Scale screen coordinates to actual photo resolution
-      const scaleX = photo.width / SCREEN_WIDTH;
-      const scaleY = photo.height / SCREEN_HEIGHT;
+      const cropX = boxLeft * scaleX;
+      const cropY = boxTop * scaleY;
+      const cropW = boxSize * scaleX;
+      const cropH = boxSize * scaleY;
+
+      // Clamp crop rect to be strictly within photo bounds
+      const safeX = Math.max(0, Math.min(cropX, photoShortSide - 1));
+      const safeY = Math.max(0, Math.min(cropY, photoLongSide - 1));
+      const safeW = Math.min(cropW, photoShortSide - safeX);
+      const safeH = Math.min(cropH, photoLongSide - safeY);
 
       const cropped = await ImageManipulator.manipulateAsync(
         photo.uri,
         [
           {
             crop: {
-              originX: boxLeft * scaleX,
-              originY: boxTop * scaleY,
-              width: boxSize * scaleX,
-              height: boxSize * scaleY,
+              originX: safeX,
+              originY: safeY,
+              width: safeW,
+              height: safeH,
             },
           },
         ],
@@ -83,58 +97,52 @@ export default function CameraScreen() {
   const boxTop = (SCREEN_HEIGHT - boxSize) / 2;
 
   return (
+    // FIX 1: CameraView has no children — overlays are siblings in a wrapper View
     <View style={styles.container}>
-      <CameraView style={styles.camera} ref={cameraRef}>
+      <CameraView style={StyleSheet.absoluteFill} ref={cameraRef} />
 
-        {/* Top overlay */}
-        <View style={[styles.darkOverlay, { top: 0, left: 0, right: 0, height: boxTop }]} />
+      {/* Top overlay */}
+      <View style={[styles.darkOverlay, { top: 0, left: 0, right: 0, height: boxTop }]} />
 
-        {/* Bottom overlay */}
-        <View style={[styles.darkOverlay, { top: boxTop + boxSize, left: 0, right: 0, bottom: 0 }]} />
+      {/* Bottom overlay */}
+      <View style={[styles.darkOverlay, { top: boxTop + boxSize, left: 0, right: 0, bottom: 0 }]} />
 
-        {/* Left overlay */}
-        <View style={[styles.darkOverlay, { top: boxTop, left: 0, width: boxLeft, height: boxSize }]} />
+      {/* Left overlay */}
+      <View style={[styles.darkOverlay, { top: boxTop, left: 0, width: boxLeft, height: boxSize }]} />
 
-        {/* Right overlay */}
-        <View style={[styles.darkOverlay, { top: boxTop, left: boxLeft + boxSize, right: 0, height: boxSize }]} />
+      {/* Right overlay */}
+      <View style={[styles.darkOverlay, { top: boxTop, left: boxLeft + boxSize, right: 0, height: boxSize }]} />
 
-        {/* Focus box border */}
-        <View
-          style={[
-            styles.focusBox,
-            { left: boxLeft, top: boxTop, width: boxSize, height: boxSize },
-          ]}
-        >
-          {/* Corner indicators */}
-          <View style={[styles.corner, styles.topLeft]} />
-          <View style={[styles.corner, styles.topRight]} />
-          <View style={[styles.corner, styles.bottomLeft]} />
-
-          {/* Resize handle — bottom-right corner */}
-          <View style={[styles.corner, styles.bottomRight]} {...resizePan.panHandlers}>
-            <View style={styles.resizeHandle} />
-          </View>
+      {/* Focus box border */}
+      <View
+        style={[
+          styles.focusBox,
+          { left: boxLeft, top: boxTop, width: boxSize, height: boxSize },
+        ]}
+      >
+        <View style={[styles.corner, styles.topLeft]} />
+        <View style={[styles.corner, styles.topRight]} />
+        <View style={[styles.corner, styles.bottomLeft]} />
+        <View style={[styles.corner, styles.bottomRight]} {...resizePan.panHandlers}>
+          <View style={styles.resizeHandle} />
         </View>
+      </View>
 
-        <Text style={[styles.hint, { top: boxTop + boxSize + 12 }]}>
-          Drag ↘ corner to resize
-        </Text>
+      <Text style={[styles.hint, { top: boxTop + boxSize + 12 }]}>
+        Drag ↘ corner to resize
+      </Text>
 
-        {/* Capture button */}
-        <View style={styles.captureArea}>
-          <TouchableOpacity style={styles.captureButton} onPress={takePicture}>
-            <Text style={styles.captureText}>Take Photo</Text>
-          </TouchableOpacity>
-        </View>
-
-      </CameraView>
+      <View style={styles.captureArea}>
+        <TouchableOpacity style={styles.captureButton} onPress={takePicture}>
+          <Text style={styles.captureText}>Take Photo</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  camera: { flex: 1 },
   darkOverlay: {
     position: 'absolute',
     backgroundColor: 'rgba(0,0,0,0.6)',

@@ -1,7 +1,7 @@
 import * as ImageManipulator from "expo-image-manipulator";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import * as FileSystem from "expo-file-system";
+import { File } from "expo-file-system/next";
 import {
   Alert,
   Image,
@@ -13,7 +13,7 @@ import {
   View,
 } from "react-native";
 import { usePatientStore } from "@/store/patientStore"; // adjust path as needed
-import { TokenService } from ".";
+import { API_URL, TokenService } from "./index";
 
 export default function ThirdScreen() {
   const { uri } = useLocalSearchParams();
@@ -121,26 +121,28 @@ export default function ThirdScreen() {
       const fileName = displayUri.split("/").pop() ?? `image_${Date.now()}.jpg`;
       const fileType = "image/jpeg";
 
-      const fileInfo = await FileSystem.getInfoAsync(displayUri);
-      const size = fileInfo.exists ? fileInfo.size ?? 0 : 0;
+     const file = new File(displayUri);
+const size = file.size ?? 0;
 
-      const backendResponse = await fetch("http://localhost:5000/api/v1/content/uploadRequest", {
+      const backendResponse = await fetch(`${API_URL}/content/uploadRequest`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fileName,
           fileType,
-          userId: patient.patientId,
           patientName: patient.name,
           patientAge: patient.age,
           patientId: patient.patientId,
-          patientDescription: description,
+          patientDescription: patient.description,
           patientQrData: patient.qrData,
+          hospitalName: patient.hospital,
+          attendantDescription: description,
           size,
           accessToken,   // ← sending tokens
           refreshToken,
         }),
       });
+console.log(patient);
 
       if (!backendResponse.ok) {
         throw new Error(`Backend error: ${backendResponse.status}`);
@@ -148,7 +150,8 @@ export default function ThirdScreen() {
 
       const resp = await backendResponse.json();
       const data=resp.data;
-
+      console.log(data);
+      
       // Save new tokens if backend rotated them
       if (data.newAccessToken && data.newRefreshToken) {
         await TokenService.save(data.newAccessToken, data.newRefreshToken);

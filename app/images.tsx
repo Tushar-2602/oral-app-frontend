@@ -1,0 +1,610 @@
+import React, { useState, useEffect, useCallback } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  Image,
+  TouchableOpacity,
+  ActivityIndicator,
+  Modal,
+  Dimensions,
+  RefreshControl,
+  StatusBar,
+  SafeAreaView,
+  Platform,
+} from "react-native";
+import { API_URL, TokenService } from "./index";  // adjust path as needed
+
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
+const APIURL = `${API_URL}/content/getContent`; // ← change to your endpoint
+ // ← replace with actual userId from auth/context
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface PatientInfo {
+  patientId?: string;
+  qrData?: string;
+  name?: string;
+  age?: number;
+  gender?: string;
+  [key: string]: any;
+}
+
+interface ContentRecord {
+  contentId: string;
+  userId: string;
+  timestamp: string;
+  signedUrl: string | null;
+  patientInfo: PatientInfo | null;
+  [key: string]: any;
+}
+
+// ─── API ──────────────────────────────────────────────────────────────────────
+
+async function fetchImages(page: number): Promise<{
+  data: ContentRecord[];
+  count: number;
+  pageSize: number;
+}> {
+  const accessToken = await TokenService.getAccess();
+  const refreshToken = await TokenService.getRefresh();
+
+  const res = await fetch(APIURL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      type: "own",
+      page,
+      accessToken,
+      refreshToken,
+    }),
+  });
+
+  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  return res.json();
+}
+
+// ─── Patient Info Card ────────────────────────────────────────────────────────
+
+function PatientCard({ info }: { info: PatientInfo }) {
+  const rows = Object.entries(info).filter(
+    ([k, v]) => v !== null && v !== undefined && k !== "__v" && k !== "_id" && k !== "contentId"
+  );
+
+  if (!rows.length) return null;
+
+  return (
+    <View style={styles.patientCard}>
+      <View style={styles.patientHeader}>
+        <View style={styles.patientDot} />
+        <Text style={styles.patientTitle}>Patient Info</Text>
+      </View>
+      {rows.map(([key, val]) => (
+        <View key={key} style={styles.patientRow}>
+          <Text style={styles.patientKey}>{formatKey(key)}</Text>
+          <Text style={styles.patientVal} numberOfLines={1}>{String(val)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function formatKey(key: string): string {
+  return key.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase());
+}
+
+// ─── Image Card ───────────────────────────────────────────────────────────────
+
+function ImageCard({
+  item,
+  onPress,
+}: {
+  item: ContentRecord;
+  onPress: (item: ContentRecord) => void;
+}) {
+  const [imgError, setImgError] = useState(false);
+  const date = item.timestamp
+    ? new Date(item.timestamp).toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      })
+    : "—";
+
+  return (
+    <TouchableOpacity
+      style={styles.card}
+      activeOpacity={0.88}
+      onPress={() => onPress(item)}
+    >
+      {/* Image */}
+      <View style={styles.imageWrap}>
+        {item.signedUrl && !imgError ? (
+          <Image
+            source={{ uri: item.signedUrl }}
+            style={styles.cardImage}
+            resizeMode="cover"
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          <View style={styles.imagePlaceholder}>
+            <Text style={styles.placeholderIcon}>🖼</Text>
+            <Text style={styles.placeholderText}>No Preview</Text>
+          </View>
+        )}
+        <View style={styles.dateBadge}>
+          <Text style={styles.dateBadgeText}>{date}</Text>
+        </View>
+      </View>
+
+      {/* Patient Info */}
+      {item.patientInfo ? (
+        <PatientCard info={item.patientInfo} />
+      ) : (
+        <View style={styles.noPatient}>
+          <Text style={styles.noPatientText}>No patient data attached</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+// ─── Lightbox ─────────────────────────────────────────────────────────────────
+
+function Lightbox({
+  item,
+  onClose,
+}: {
+  item: ContentRecord | null;
+  onClose: () => void;
+}) {
+  if (!item) return null;
+  return (
+    <Modal visible animationType="fade" transparent statusBarTranslucent>
+      <View style={styles.lightboxBg}>
+        <TouchableOpacity style={styles.lightboxClose} onPress={onClose}>
+          <Text style={styles.lightboxCloseText}>✕</Text>
+        </TouchableOpacity>
+        {item.signedUrl ? (
+          <Image
+            source={{ uri: item.signedUrl }}
+            style={styles.lightboxImage}
+            resizeMode="contain"
+          />
+        ) : (
+          <View style={styles.lightboxPlaceholder}>
+            <Text style={styles.placeholderIcon}>🖼</Text>
+          </View>
+        )}
+        {item.patientInfo && (
+          <View style={styles.lightboxInfo}>
+            <PatientCard info={item.patientInfo} />
+          </View>
+        )}
+      </View>
+    </Modal>
+  );
+}
+
+// ─── Pagination Bar ───────────────────────────────────────────────────────────
+
+function PaginationBar({
+  page,
+  hasMore,
+  loading,
+  onPrev,
+  onNext,
+}: {
+  page: number;
+  hasMore: boolean;
+  loading: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <View style={styles.pagination}>
+      <TouchableOpacity
+        style={[styles.pageBtn, page === 0 && styles.pageBtnDisabled]}
+        onPress={onPrev}
+        disabled={page === 0 || loading}
+      >
+        <Text style={[styles.pageBtnText, page === 0 && styles.pageBtnTextDisabled]}>
+          ← Prev
+        </Text>
+      </TouchableOpacity>
+
+      <View style={styles.pageIndicator}>
+        <Text style={styles.pageNumber}>Page {page + 1}</Text>
+      </View>
+
+      <TouchableOpacity
+        style={[styles.pageBtn, !hasMore && styles.pageBtnDisabled]}
+        onPress={onNext}
+        disabled={!hasMore || loading}
+      >
+        <Text style={[styles.pageBtnText, !hasMore && styles.pageBtnTextDisabled]}>
+          Next →
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+// ─── Main Screen ──────────────────────────────────────────────────────────────
+
+export default function Images() {
+  const [records, setRecords] = useState<ContentRecord[]>([]);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<ContentRecord | null>(null);
+
+  const load = useCallback(async (p: number, isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+    setError(null);
+
+    try {
+      const result = await fetchImages(p);
+      setRecords(result.data ?? []);
+      setHasMore((result.data?.length ?? 0) >= result.pageSize);
+    } catch (e: any) {
+      setError(e.message ?? "Failed to load images.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load(page);
+  }, [page]);
+
+  const handleRefresh = () => load(page, true);
+  const handlePrev = () => setPage((p) => Math.max(0, p - 1));
+  const handleNext = () => setPage((p) => p + 1);
+
+  // ── Render ──
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="dark-content" backgroundColor="#F7F5F2" />
+
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Images</Text>
+        {records.length > 0 && (
+          <Text style={styles.headerSub}>{records.length} records</Text>
+        )}
+      </View>
+
+      {/* Error */}
+      {error && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity onPress={() => load(page)}>
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* List */}
+      {loading && !refreshing ? (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color="#1A1A2E" />
+          <Text style={styles.loadingText}>Loading…</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={records}
+          keyExtractor={(item) => item.contentId}
+          renderItem={({ item }) => (
+            <ImageCard item={item} onPress={setSelected} />
+          )}
+          contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor="#1A1A2E"
+            />
+          }
+          ListEmptyComponent={
+            !loading ? (
+              <View style={styles.centered}>
+                <Text style={styles.emptyIcon}>📭</Text>
+                <Text style={styles.emptyText}>No images found</Text>
+              </View>
+            ) : null
+          }
+          ListFooterComponent={
+            records.length > 0 ? (
+              <PaginationBar
+                page={page}
+                hasMore={hasMore}
+                loading={loading}
+                onPrev={handlePrev}
+                onNext={handleNext}
+              />
+            ) : null
+          }
+        />
+      )}
+
+      {/* Lightbox */}
+      <Lightbox item={selected} onClose={() => setSelected(null)} />
+    </SafeAreaView>
+  );
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const CARD_RADIUS = 16;
+const ACCENT = "#1A1A2E";
+const TEAL = "#0F7B6C";
+const BG = "#F7F5F2";
+const CARD_BG = "#FFFFFF";
+const MUTED = "#8A8A99";
+const BORDER = "#EBEBF0";
+
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: BG,
+  },
+
+  // Header
+  header: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === "android" ? 16 : 8,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
+    backgroundColor: BG,
+  },
+  headerTitle: {
+    fontSize: 26,
+    fontWeight: "800",
+    color: ACCENT,
+    letterSpacing: -0.5,
+  },
+  headerSub: {
+    fontSize: 13,
+    color: MUTED,
+    fontWeight: "500",
+  },
+
+  // Error
+  errorBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#FFF0F0",
+    borderLeftWidth: 3,
+    borderLeftColor: "#E03E3E",
+    marginHorizontal: 16,
+    marginTop: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  errorText: { color: "#C0392B", fontSize: 13, flex: 1 },
+  retryText: { color: TEAL, fontWeight: "700", fontSize: 13, marginLeft: 8 },
+
+  // List
+  list: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 32,
+    gap: 16,
+  },
+
+  // Card
+  card: {
+    backgroundColor: CARD_BG,
+    borderRadius: CARD_RADIUS,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+  imageWrap: {
+    width: "100%",
+    height: 200,
+    backgroundColor: "#EEEEF4",
+    position: "relative",
+  },
+  cardImage: {
+    width: "100%",
+    height: "100%",
+  },
+  imagePlaceholder: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 6,
+  },
+  placeholderIcon: { fontSize: 36 },
+  placeholderText: { color: MUTED, fontSize: 13 },
+  dateBadge: {
+    position: "absolute",
+    bottom: 10,
+    right: 10,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+  },
+  dateBadgeText: { color: "#fff", fontSize: 11, fontWeight: "600" },
+
+  // Patient Card
+  patientCard: {
+    padding: 14,
+    gap: 6,
+  },
+  patientHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 4,
+  },
+  patientDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: TEAL,
+  },
+  patientTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: TEAL,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  patientRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 3,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F0F0F5",
+  },
+  patientKey: {
+    fontSize: 13,
+    color: MUTED,
+    fontWeight: "500",
+    flex: 1,
+  },
+  patientVal: {
+    fontSize: 13,
+    color: ACCENT,
+    fontWeight: "600",
+    flex: 1,
+    textAlign: "right",
+  },
+  noPatient: {
+    padding: 14,
+    alignItems: "center",
+  },
+  noPatientText: {
+    fontSize: 12,
+    color: MUTED,
+    fontStyle: "italic",
+  },
+
+  // Pagination
+  pagination: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 8,
+    marginBottom: 4,
+    paddingHorizontal: 4,
+  },
+  pageBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    backgroundColor: ACCENT,
+    borderRadius: 10,
+  },
+  pageBtnDisabled: {
+    backgroundColor: "#DDDDE8",
+  },
+  pageBtnText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  pageBtnTextDisabled: {
+    color: MUTED,
+  },
+  pageIndicator: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: "#EEEEF4",
+  },
+  pageNumber: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: ACCENT,
+  },
+
+  // Lightbox
+  lightboxBg: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.92)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 16,
+  },
+  lightboxClose: {
+    position: "absolute",
+    top: 52,
+    right: 20,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 10,
+  },
+  lightboxCloseText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  lightboxImage: {
+    width: SCREEN_WIDTH - 32,
+    height: SCREEN_WIDTH - 32,
+    borderRadius: 12,
+  },
+  lightboxPlaceholder: {
+    width: SCREEN_WIDTH - 32,
+    height: SCREEN_WIDTH - 32,
+    borderRadius: 12,
+    backgroundColor: "#222",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  lightboxInfo: {
+    width: SCREEN_WIDTH - 32,
+    marginTop: 12,
+    backgroundColor: "#1C1C2E",
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+
+  // States
+  centered: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 80,
+    gap: 10,
+  },
+  loadingText: {
+    color: MUTED,
+    fontSize: 14,
+    marginTop: 8,
+  },
+  emptyIcon: { fontSize: 40 },
+  emptyText: {
+    color: MUTED,
+    fontSize: 15,
+    fontWeight: "500",
+  },
+});

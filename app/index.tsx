@@ -3,7 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator 
 import { useRouter } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 
-const API_URL = 'http://localhost:5000/api/v1'; // Replace with your backend URL
+export const API_URL = 'http://192.168.149.68:5000/api/v1'; // Replace with your backend URL
 
 export const TokenService = {
   save: async (access: string, refresh: string) => {
@@ -32,6 +32,8 @@ export default function AuthScreen() {
 
   const checkExistingTokens = async () => {
     try {
+      console.log("entered");
+      
       const accessToken = await TokenService.getAccess();
       const refreshToken = await TokenService.getRefresh();
 
@@ -46,14 +48,19 @@ export default function AuthScreen() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accessToken,refreshToken }),
       });
-
+      console.log("token sent");
       const resp = await res.json();
       const data=resp.data;
-
-      if (res.ok) {
+      if (res.status == 200) {
+        console.log(`datea ${data}`);
         // If backend returns new tokens, save them
         if (data.accessToken && data.refreshToken) {
-          await TokenService.save(data.accessToken, data.refreshToken);
+          
+          console.log("before save");
+
+await TokenService.save(data.accessToken, data.refreshToken);
+
+console.log("after save");
         }
         router.replace('/home');
       } else {
@@ -88,7 +95,7 @@ export default function AuthScreen() {
       console.log(data);
       
 
-      if (res.ok && data.data.accessToken && data.data.refreshToken) {
+      if (res.ok && data.accessToken && data.refreshToken) {
         console.log("fff");
         await TokenService.save(data.accessToken, data.refreshToken);
         
