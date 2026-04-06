@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import {
+  Alert,
   Button,
   Modal,
   StyleSheet,
@@ -11,11 +12,56 @@ import {
 } from "react-native";
 import { usePatientStore } from "@/store/patientStore";
 import { useState } from "react";
+import { API_URL, TokenService } from "./index";
 
 export default function Home() {
   const router = useRouter();
   const { patient, clearPatient } = usePatientStore();
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const handleLogout = async () => {
+    setDrawerOpen(false);
+    try {
+      const refreshToken = await TokenService.getRefresh();
+
+      if (!refreshToken) {
+        // No token found, just clear and redirect
+       TokenService.clear();
+        router.replace("/");
+        return;
+      }
+
+      const response = await fetch(`${API_URL}/user/logout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken }),
+      });
+
+      const data = await response.json();
+
+      // Clear tokens locally regardless of backend response
+      TokenService.clear();
+
+      if (!response.ok && response.status !== 404) {
+        // 404 = already logged out on server side, still fine to proceed
+        console.warn("Logout warning:", data.message);
+      }
+    } catch (err) {
+      console.error("Logout error:", err);
+      // Still clear tokens and redirect even on network error
+     TokenService.clear();
+    } finally {
+      router.replace("/");
+    }
+  };
+
+  const confirmLogout = () => {
+    setDrawerOpen(false);
+    Alert.alert("Logout", "Are you sure you want to log out?", [
+      { text: "Cancel", style: "cancel", onPress: () => setDrawerOpen(true) },
+      { text: "Logout", style: "destructive", onPress: handleLogout },
+    ]);
+  };
 
   return (
     <View style={styles.container}>
@@ -52,6 +98,15 @@ export default function Home() {
                 >
                   <Ionicons name="person-add-outline" size={22} color="#333" />
                   <Text style={styles.drawerItemText}>Sign Up</Text>
+                </TouchableOpacity>
+
+                {/* Logout — pinned at bottom */}
+                <TouchableOpacity
+                  style={styles.logoutItem}
+                  onPress={confirmLogout}
+                >
+                  <Ionicons name="log-out-outline" size={22} color="#E53935" />
+                  <Text style={styles.logoutText}>Logout</Text>
                 </TouchableOpacity>
               </View>
             </TouchableWithoutFeedback>
@@ -95,7 +150,7 @@ const styles = StyleSheet.create({
     height: 60,
     width: "100%",
     flexDirection: "row",
-    justifyContent: "flex-start", // moved to left
+    justifyContent: "flex-start",
     alignItems: "center",
     paddingHorizontal: 15,
     marginTop: 40,
@@ -147,5 +202,22 @@ const styles = StyleSheet.create({
   drawerItemText: {
     fontSize: 16,
     color: "#333",
+  },
+
+  // Logout pinned to bottom
+  logoutItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 14,
+    gap: 12,
+    position: "absolute",
+    bottom: 40,
+    left: 20,
+    right: 20,
+  },
+  logoutText: {
+    fontSize: 16,
+    color: "#E53935",
+    fontWeight: "600",
   },
 });

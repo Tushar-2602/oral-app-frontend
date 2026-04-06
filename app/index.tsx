@@ -3,7 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator 
 import { useRouter } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 
-export const API_URL = 'http://192.168.149.68:5000/api/v1'; // Replace with your backend URL
+export const API_URL = 'http://192.168.149.3:5000/api/v1'; // Replace with your backend URL
 
 export const TokenService = {
   save: async (access: string, refresh: string) => {
@@ -89,6 +89,11 @@ console.log("after save");
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
+
+      if (res.status == 401) {
+        setError('incorrect email or password');
+        return;
+      }
 
       const resp = await res.json();
       const data=resp.data;
