@@ -17,9 +17,11 @@ import {
   View,
 } from "react-native";
 import { getDb } from "./third"; // adjust path as needed
+import { TokenService } from "./index";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const PAGE_SIZE = 20;
+import { API_URL } from "./index";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -35,10 +37,83 @@ interface OfflineRecord {
   patientQrData?: string;
   hospitalName?: string;
   attendantDescription?: string;
+  gender?: string;
   savedAt?: string;
 }
 
 // ─── DB ───────────────────────────────────────────────────────────────────────
+
+let cancelUploadAll = false;
+
+export function cancelUploadAllProcess() {
+  cancelUploadAll = true;
+}
+
+async function uploadSingleRecord(record: OfflineRecord): Promise<boolean> {
+  try {
+    const fileName = record.fileName || `image_${Date.now()}.jpg`;
+    const ext = fileName.split(".").pop() || "jpg";
+    const fileType = `image/${ext === "jpg" ? "jpeg" : ext}`;
+    const accessToken = await TokenService.getAccess();
+    const refreshToken = await TokenService.getRefresh();
+
+    // 1. Backend call
+    const res = await fetch(`${API_URL}/content/uploadRequest`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        fileName,
+        fileType,
+        size: record.size || 0,
+        patientName: record.patientName,
+        patientAge: record.patientAge,
+        patientId: record.patientId,
+        patientDescription: record.patientDescription,
+        patientQrData: record.patientQrData,
+        hospitalName: record.hospitalName,
+        attendantDescription: record.attendantDescription,
+        patientGender:record.gender,
+        accessToken,
+        refreshToken
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message);
+
+    const { uploadUrl, fields } = data.data;
+    console.log(uploadUrl);
+    
+    // 2. FormData
+    const formData = new FormData();
+    Object.entries(fields).forEach(([key, value]) => {
+      formData.append(key, value as string);
+    });
+
+    formData.append("file", {
+      uri: record.uri,
+      name: fileName,
+      type: fileType,
+    } as any);
+
+    // 3. Upload to S3
+    const uploadRes = await fetch(uploadUrl, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (uploadRes.status !== 204) {
+      throw new Error("S3 upload failed");
+    }
+
+    return true;
+  } catch (err) {
+    console.error("Upload error:", err);
+    return false;
+  }
+}
 
 async function fetchOfflineRecords(
   page: number
@@ -73,9 +148,56 @@ async function deleteOfflineRecord(id: string): Promise<void> {
   await db.runAsync("DELETE FROM saved_records WHERE id = ?;", id);
 }
 
-async function uploadAllRecords(): Promise<void> {
-  // TODO: implement actual upload logic
-  alert("Upload all not yet implemented.");
+async function uploadAllRecords(
+  onProgress?: (uploaded: number, total: number) => void
+): Promise<void> {
+  cancelUploadAll = false;
+
+  const db = await getDb();
+
+  const countResult = await db.getFirstAsync<{ count: number }>(
+    "SELECT COUNT(*) as count FROM saved_records;"
+  );
+
+  const total = countResult?.count ?? 0;
+
+  let uploaded = 0;
+  const LIMIT = 20;
+
+  while (true) {
+    if (cancelUploadAll) break;
+
+    const rows = await db.getAllAsync<{ id: string; data: string }>(
+      "SELECT id, data FROM saved_records ORDER BY rowid ASC LIMIT ? OFFSET 0;",
+      LIMIT
+    );
+
+    if (!rows.length) break;
+
+    const records: OfflineRecord[] = rows.map((row) => {
+      try {
+        return { id: row.id, ...JSON.parse(row.data) };
+      } catch {
+        return { id: row.id, uri: "" };
+      }
+    });
+
+    for (let i = 0; i < records.length; i++) {
+      if (cancelUploadAll) break;
+
+      const record = records[i];
+
+      const success = await uploadSingleRecord(record);
+
+      if (success) {
+        await deleteOfflineRecord(record.id);
+        uploaded++;
+        onProgress?.(uploaded, total);
+      }
+
+      await new Promise((res) => setTimeout(res, 1000)); // 1/sec
+    }
+  }
 }
 
 // ─── Patient Info Card ────────────────────────────────────────────────────────
@@ -88,6 +210,7 @@ const PATIENT_KEYS: { key: keyof OfflineRecord; label: string }[] = [
   { key: "patientDescription", label: "Description" },
   { key: "attendantDescription", label: "Attendant Notes" },
   { key: "patientQrData", label: "QR Data" },
+  { key: "gender", label: "Gender" },
 ];
 
 function PatientCard({ record }: { record: OfflineRecord }) {
@@ -147,9 +270,20 @@ function ImageCard({
     }
   };
 
-  const handleUpload = () => {
-    alert(`Upload not yet implemented for record: ${item.id}`);
-  };
+  const handleUpload = async () => {
+  try {
+    const success = await uploadSingleRecord(item);
+
+    if (success) {
+      alert("Upload successful ✅");
+      await onDelete(item.id);
+    } else {
+      alert("Upload failed ❌");
+    }
+  } catch {
+    alert("Upload error ❌");
+  }
+};
 
   return (
     <TouchableOpacity
@@ -308,6 +442,7 @@ export default function OfflineImages() {
   const [selected, setSelected] = useState<OfflineRecord | null>(null);
   const [uploadConfirming, setUploadConfirming] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState({ uploaded: 0, total: 0 });
 
   const load = useCallback(async (p: number, isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -346,20 +481,27 @@ export default function OfflineImages() {
   }, []);
 
   const handleUploadAll = async () => {
-    if (!uploadConfirming) {
-      setUploadConfirming(true);
-      return;
-    }
-    setUploadConfirming(false);
-    setUploading(true);
-    try {
-      await uploadAllRecords();
-    } catch (e: any) {
-      setError(e.message ?? "Upload failed.");
-    } finally {
-      setUploading(false);
-    }
-  };
+  if (!uploadConfirming) {
+    setUploadConfirming(true);
+    return;
+  }
+
+  setUploadConfirming(false);
+  setUploading(true);
+
+  try {
+    await uploadAllRecords((uploaded, total) => {
+      setProgress({ uploaded, total });
+    });
+
+    alert("Upload completed ✅");
+    load(page);
+  } catch (e: any) {
+    setError(e.message ?? "Upload failed.");
+  } finally {
+    setUploading(false);
+  }
+};
 
   const handleCancelConfirm = () => {
     if (uploadConfirming) setUploadConfirming(false);
@@ -382,6 +524,14 @@ export default function OfflineImages() {
         <Text style={styles.headerTitle}>Offline Images</Text> */}
 
         <View style={styles.headerRight}>
+            {uploading && (
+  <TouchableOpacity
+    style={[styles.uploadAllBtn, { backgroundColor: "#E03E3E" }]}
+    onPress={() => cancelUploadAllProcess()}
+  >
+    <Text style={styles.uploadAllBtnText}>Cancel</Text>
+  </TouchableOpacity>
+)}
           {total > 0 && (
             <View style={styles.countBadge}>
               <Text style={styles.countBadgeText}>{total}</Text>
@@ -406,6 +556,13 @@ export default function OfflineImages() {
           </TouchableOpacity>
         </View>
       </View>
+      {uploading && (
+  <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+    <Text style={{ fontWeight: "600" }}>
+      Uploaded {progress.uploaded} / {progress.total}
+    </Text>
+  </View>
+)}
 
       {/* Error */}
       {error && (

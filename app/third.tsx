@@ -160,6 +160,7 @@ export default function ThirdScreen() {
         patientDescription: patient.description,
         patientQrData: patient.qrData,
         hospitalName: patient.hospital,
+        gender:patient.gender,
         attendantDescription: description,
         savedAt: new Date().toISOString(),
       });
@@ -212,6 +213,7 @@ export default function ThirdScreen() {
           patientQrData: patient.qrData,
           hospitalName: patient.hospital,
           attendantDescription: description,
+          patientGender:patient.gender,
           size,
           accessToken,
           refreshToken,

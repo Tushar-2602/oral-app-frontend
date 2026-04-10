@@ -36,6 +36,9 @@ interface ContentRecord {
   timestamp: string;
   signedUrl: string | null;
   patientInfo: PatientInfo | null;
+  attendantDescription?: string | null;
+  modelReview?: string | null;
+  moderatorReview?: string | null;
   [key: string]: any;
 }
 
@@ -87,26 +90,38 @@ async function deleteImage(contentId: string): Promise<void> {
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatKey(key: string): string {
+  return key.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase());
+}
+
 // ─── Patient Info Card ────────────────────────────────────────────────────────
 
 function PatientCard({ info }: { info: PatientInfo }) {
   const rows = Object.entries(info).filter(
     ([k, v]) =>
-      v !== null && v !== undefined && k !== "__v" && k !== "_id" && k !== "contentId"
+      v !== null &&
+      v !== undefined &&
+      k !== "__v" &&
+      k !== "_id" &&
+      k !== "contentId" &&
+      k !== "createdAt" &&
+      k !== "updatedAt"
   );
 
   if (!rows.length) return null;
 
   return (
     <View style={styles.patientCard}>
-      <View style={styles.patientHeader}>
-        <View style={styles.patientDot} />
-        <Text style={styles.patientTitle}>Patient Info</Text>
+      <View style={styles.sectionHeader}>
+        <View style={[styles.sectionDot, { backgroundColor: TEAL }]} />
+        <Text style={[styles.sectionTitle, { color: TEAL }]}>Patient Info</Text>
       </View>
       {rows.map(([key, val]) => (
-        <View key={key} style={styles.patientRow}>
-          <Text style={styles.patientKey}>{formatKey(key)}</Text>
-          <Text style={styles.patientVal} numberOfLines={1}>
+        <View key={key} style={styles.infoRow}>
+          <Text style={styles.infoKey}>{formatKey(key)}</Text>
+          <Text style={styles.infoVal} numberOfLines={2}>
             {String(val)}
           </Text>
         </View>
@@ -115,8 +130,50 @@ function PatientCard({ info }: { info: PatientInfo }) {
   );
 }
 
-function formatKey(key: string): string {
-  return key.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase());
+// ─── Review Badge ─────────────────────────────────────────────────────────────
+
+function ReviewBadge({ label, value }: { label: string; value: string | null | undefined }) {
+  const isPending = value === null || value === undefined;
+  return (
+    <View style={styles.infoRow}>
+      <Text style={styles.infoKey}>{label}</Text>
+      <View style={[styles.badge, isPending ? styles.badgePending : styles.badgeDone]}>
+        <Text style={[styles.badgeText, isPending ? styles.badgeTextPending : styles.badgeTextDone]}>
+          {isPending ? "Pending" : value}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+// ─── Content Meta Card ────────────────────────────────────────────────────────
+
+function ContentMetaCard({ item }: { item: ContentRecord }) {
+  const hasAttendant = item.attendantDescription !== null && item.attendantDescription !== undefined;
+  const hasReviews = item.modelReview !== undefined || item.moderatorReview !== undefined;
+
+  if (!hasAttendant && !hasReviews) return null;
+
+  return (
+    <View style={styles.metaCard}>
+      <View style={styles.sectionHeader}>
+        <View style={[styles.sectionDot, { backgroundColor: PURPLE }]} />
+        <Text style={[styles.sectionTitle, { color: PURPLE }]}>Review Info</Text>
+      </View>
+
+      {hasAttendant && (
+        <View style={styles.infoRow}>
+          <Text style={styles.infoKey}>Attendant Note</Text>
+          <Text style={[styles.infoVal, { flex: 2 }]} numberOfLines={3}>
+            {item.attendantDescription ?? "—"}
+          </Text>
+        </View>
+      )}
+
+      <ReviewBadge label="Model Review" value={item.modelReview} />
+      <ReviewBadge label="Moderator Review" value={item.moderatorReview} />
+    </View>
+  );
 }
 
 // ─── Image Card ───────────────────────────────────────────────────────────────
@@ -197,6 +254,12 @@ function ImageCard({
           <Text style={styles.noPatientText}>No patient data attached</Text>
         </View>
       )}
+
+      {/* Divider */}
+      <View style={styles.divider} />
+
+      {/* Review / Meta Info */}
+      <ContentMetaCard item={item} />
     </TouchableOpacity>
   );
 }
@@ -217,6 +280,7 @@ function Lightbox({
         <TouchableOpacity style={styles.lightboxClose} onPress={onClose}>
           <Text style={styles.lightboxCloseText}>✕</Text>
         </TouchableOpacity>
+
         {item.signedUrl ? (
           <Image
             source={{ uri: item.signedUrl }}
@@ -228,11 +292,11 @@ function Lightbox({
             <Text style={styles.placeholderIcon}>🖼</Text>
           </View>
         )}
-        {item.patientInfo && (
-          <View style={styles.lightboxInfo}>
-            <PatientCard info={item.patientInfo} />
-          </View>
-        )}
+
+        <View style={styles.lightboxInfo}>
+          {item.patientInfo && <PatientCard info={item.patientInfo} />}
+          <ContentMetaCard item={item} />
+        </View>
       </View>
     </Modal>
   );
@@ -301,6 +365,7 @@ export default function Images() {
     try {
       const result = await fetchImages(p);
       setRecords(result.data ?? []);
+      console.log(result.data ?? []);
       setHasMore((result.data?.length ?? 0) >= result.pageSize);
     } catch (e: any) {
       setError(e.message ?? "Failed to load images.");
@@ -403,6 +468,7 @@ export default function Images() {
 const CARD_RADIUS = 16;
 const ACCENT = "#1A1A2E";
 const TEAL = "#0F7B6C";
+const PURPLE = "#7B5EA7";
 const BG = "#F7F5F2";
 const CARD_BG = "#FFFFFF";
 const MUTED = "#8A8A99";
@@ -523,51 +589,91 @@ const styles = StyleSheet.create({
   },
   dateBadgeText: { color: "#fff", fontSize: 11, fontWeight: "600" },
 
-  // Patient Card
-  patientCard: {
-    padding: 14,
-    gap: 6,
+  // Divider
+  divider: {
+    height: 1,
+    backgroundColor: BORDER,
+    marginHorizontal: 14,
   },
-  patientHeader: {
+
+  // Shared section header
+  sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    marginBottom: 4,
+    marginBottom: 6,
   },
-  patientDot: {
+  sectionDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: TEAL,
   },
-  patientTitle: {
+  sectionTitle: {
     fontSize: 12,
     fontWeight: "700",
-    color: TEAL,
     textTransform: "uppercase",
     letterSpacing: 0.8,
   },
-  patientRow: {
+
+  // Shared info row
+  infoRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: 3,
+    paddingVertical: 4,
     borderBottomWidth: 1,
     borderBottomColor: "#F0F0F5",
   },
-  patientKey: {
+  infoKey: {
     fontSize: 13,
     color: MUTED,
     fontWeight: "500",
     flex: 1,
   },
-  patientVal: {
+  infoVal: {
     fontSize: 13,
     color: ACCENT,
     fontWeight: "600",
     flex: 1,
     textAlign: "right",
   },
+
+  // Patient Card
+  patientCard: {
+    padding: 14,
+    gap: 4,
+  },
+
+  // Meta Card (Review Info)
+  metaCard: {
+    padding: 14,
+    gap: 4,
+  },
+
+  // Review Badges
+  badge: {
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  badgeDone: {
+    backgroundColor: "#E8F5E9",
+  },
+  badgePending: {
+    backgroundColor: "#FFF3E0",
+  },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  badgeTextDone: {
+    color: "#2E7D32",
+  },
+  badgeTextPending: {
+    color: "#E65100",
+  },
+
+  // No patient
   noPatient: {
     padding: 14,
     alignItems: "center",
