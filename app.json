@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "photo-app",
-    "slug": "photo-app",
+    "name": "oroscreen",
+    "slug": "oroscreen",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "photoapp",
+    "scheme": "oroscreen",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
@@ -20,7 +20,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.photoapp"
+      "package": "com.anonymous.oroscreen"
     },
     "web": {
       "output": "static",
@@ -40,7 +40,8 @@
           }
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true,

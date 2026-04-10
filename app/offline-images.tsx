@@ -1,98 +1,99 @@
-import React, { useState, useEffect, useCallback } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
+  ActivityIndicator,
+  Dimensions,
   FlatList,
   Image,
-  TouchableOpacity,
-  ActivityIndicator,
   Modal,
-  Dimensions,
-  RefreshControl,
-  StatusBar,
-  SafeAreaView,
   Platform,
+  RefreshControl,
+  SafeAreaView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { API_URL, TokenService } from "./index";
+import { getDb } from "./third"; // adjust path as needed
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
-const APIURL = `${API_URL}/content/getContent`;
+const PAGE_SIZE = 20;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface PatientInfo {
+interface OfflineRecord {
+  id: string;
+  uri: string;
+  size?: number;
+  fileName?: string;
+  patientName?: string;
+  patientAge?: number | string;
   patientId?: string;
-  qrData?: string;
-  name?: string;
-  age?: number;
-  gender?: string;
-  [key: string]: any;
+  patientDescription?: string;
+  patientQrData?: string;
+  hospitalName?: string;
+  attendantDescription?: string;
+  savedAt?: string;
 }
 
-interface ContentRecord {
-  contentId: string;
-  userId: string;
-  timestamp: string;
-  signedUrl: string | null;
-  patientInfo: PatientInfo | null;
-  [key: string]: any;
-}
+// ─── DB ───────────────────────────────────────────────────────────────────────
 
-// ─── API ──────────────────────────────────────────────────────────────────────
+async function fetchOfflineRecords(
+  page: number
+): Promise<{ data: OfflineRecord[]; total: number }> {
+  const db = await getDb();
+  const offset = page * PAGE_SIZE;
 
-async function fetchImages(page: number): Promise<{
-  data: ContentRecord[];
-  count: number;
-  pageSize: number;
-}> {
-  const accessToken = await TokenService.getAccess();
-  const refreshToken = await TokenService.getRefresh();
+  const rows = await db.getAllAsync<{ id: string; data: string }>(
+    "SELECT id, data FROM saved_records ORDER BY rowid DESC LIMIT ? OFFSET ?;",
+    PAGE_SIZE,
+    offset
+  );
 
-  const res = await fetch(APIURL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({
-      type: "own",
-      page,
-      accessToken,
-      refreshToken,
-    }),
+  const countResult = await db.getFirstAsync<{ count: number }>(
+    "SELECT COUNT(*) as count FROM saved_records;"
+  );
+
+  const data: OfflineRecord[] = rows.map((row) => {
+    try {
+      const parsed = JSON.parse(row.data);
+      return { id: row.id, ...parsed };
+    } catch {
+      return { id: row.id, uri: "" };
+    }
   });
 
-  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
-  return res.json();
+  return { data, total: countResult?.count ?? 0 };
 }
 
-async function deleteImage(contentId: string): Promise<void> {
-  const accessToken = await TokenService.getAccess();
-  const refreshToken = await TokenService.getRefresh();
+async function deleteOfflineRecord(id: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("DELETE FROM saved_records WHERE id = ?;", id);
+}
 
-  const res = await fetch(`${API_URL}/content/deleteContent`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({
-      contentId,
-      accessToken,
-      refreshToken,
-    }),
-  });
-
-  if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+async function uploadAllRecords(): Promise<void> {
+  // TODO: implement actual upload logic
+  alert("Upload all not yet implemented.");
 }
 
 // ─── Patient Info Card ────────────────────────────────────────────────────────
 
-function PatientCard({ info }: { info: PatientInfo }) {
-  const rows = Object.entries(info).filter(
-    ([k, v]) =>
-      v !== null && v !== undefined && k !== "__v" && k !== "_id" && k !== "contentId"
+const PATIENT_KEYS: { key: keyof OfflineRecord; label: string }[] = [
+  { key: "patientName", label: "Name" },
+  { key: "patientId", label: "Patient ID" },
+  { key: "patientAge", label: "Age" },
+  { key: "hospitalName", label: "Hospital" },
+  { key: "patientDescription", label: "Description" },
+  { key: "attendantDescription", label: "Attendant Notes" },
+  { key: "patientQrData", label: "QR Data" },
+];
+
+function PatientCard({ record }: { record: OfflineRecord }) {
+  const rows = PATIENT_KEYS.filter(
+    ({ key }) =>
+      record[key] !== null && record[key] !== undefined && record[key] !== ""
   );
 
   if (!rows.length) return null;
@@ -103,20 +104,16 @@ function PatientCard({ info }: { info: PatientInfo }) {
         <View style={styles.patientDot} />
         <Text style={styles.patientTitle}>Patient Info</Text>
       </View>
-      {rows.map(([key, val]) => (
+      {rows.map(({ key, label }) => (
         <View key={key} style={styles.patientRow}>
-          <Text style={styles.patientKey}>{formatKey(key)}</Text>
+          <Text style={styles.patientKey}>{label}</Text>
           <Text style={styles.patientVal} numberOfLines={1}>
-            {String(val)}
+            {String(record[key])}
           </Text>
         </View>
       ))}
     </View>
   );
-}
-
-function formatKey(key: string): string {
-  return key.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase());
 }
 
 // ─── Image Card ───────────────────────────────────────────────────────────────
@@ -126,15 +123,15 @@ function ImageCard({
   onPress,
   onDelete,
 }: {
-  item: ContentRecord;
-  onPress: (item: ContentRecord) => void;
-  onDelete: (contentId: string) => void;
+  item: OfflineRecord;
+  onPress: (item: OfflineRecord) => void;
+  onDelete: (id: string) => void;
 }) {
   const [imgError, setImgError] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const date = item.timestamp
-    ? new Date(item.timestamp).toLocaleDateString("en-IN", {
+  const date = item.savedAt
+    ? new Date(item.savedAt).toLocaleDateString("en-IN", {
         day: "2-digit",
         month: "short",
         year: "numeric",
@@ -144,10 +141,14 @@ function ImageCard({
   const handleDelete = async () => {
     setDeleting(true);
     try {
-      await onDelete(item.contentId);
+      await onDelete(item.id);
     } finally {
       setDeleting(false);
     }
+  };
+
+  const handleUpload = () => {
+    alert(`Upload not yet implemented for record: ${item.id}`);
   };
 
   return (
@@ -156,24 +157,29 @@ function ImageCard({
       activeOpacity={0.88}
       onPress={() => onPress(item)}
     >
-      {/* Delete Button */}
-      <TouchableOpacity
-        style={styles.deleteBtn}
-        onPress={handleDelete}
-        disabled={deleting}
-      >
-        {deleting ? (
-          <ActivityIndicator size="small" color="#fff" />
-        ) : (
-          <Text style={styles.deleteBtnText}>🗑 Delete</Text>
-        )}
-      </TouchableOpacity>
+      {/* Action Buttons */}
+      <View style={styles.cardActions}>
+        <TouchableOpacity style={styles.uploadBtn} onPress={handleUpload}>
+          <Text style={styles.uploadBtnText}>⬆ Upload</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.deleteBtn}
+          onPress={handleDelete}
+          disabled={deleting}
+        >
+          {deleting ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.deleteBtnText}>🗑 Delete</Text>
+          )}
+        </TouchableOpacity>
+      </View>
 
       {/* Image */}
       <View style={styles.imageWrap}>
-        {item.signedUrl && !imgError ? (
+        {item.uri && !imgError ? (
           <Image
-            source={{ uri: item.signedUrl }}
+            source={{ uri: item.uri }}
             style={styles.cardImage}
             resizeMode="cover"
             onError={() => setImgError(true)}
@@ -187,11 +193,15 @@ function ImageCard({
         <View style={styles.dateBadge}>
           <Text style={styles.dateBadgeText}>{date}</Text>
         </View>
+        {/* Offline badge */}
+        <View style={styles.offlineBadge}>
+          <Text style={styles.offlineBadgeText}>OFFLINE</Text>
+        </View>
       </View>
 
       {/* Patient Info */}
-      {item.patientInfo ? (
-        <PatientCard info={item.patientInfo} />
+      {item.patientName || item.patientId || item.hospitalName ? (
+        <PatientCard record={item} />
       ) : (
         <View style={styles.noPatient}>
           <Text style={styles.noPatientText}>No patient data attached</Text>
@@ -207,7 +217,7 @@ function Lightbox({
   item,
   onClose,
 }: {
-  item: ContentRecord | null;
+  item: OfflineRecord | null;
   onClose: () => void;
 }) {
   if (!item) return null;
@@ -217,9 +227,9 @@ function Lightbox({
         <TouchableOpacity style={styles.lightboxClose} onPress={onClose}>
           <Text style={styles.lightboxCloseText}>✕</Text>
         </TouchableOpacity>
-        {item.signedUrl ? (
+        {item.uri ? (
           <Image
-            source={{ uri: item.signedUrl }}
+            source={{ uri: item.uri }}
             style={styles.lightboxImage}
             resizeMode="contain"
           />
@@ -228,11 +238,9 @@ function Lightbox({
             <Text style={styles.placeholderIcon}>🖼</Text>
           </View>
         )}
-        {item.patientInfo && (
-          <View style={styles.lightboxInfo}>
-            <PatientCard info={item.patientInfo} />
-          </View>
-        )}
+        <View style={styles.lightboxInfo}>
+          <PatientCard record={item} />
+        </View>
       </View>
     </Modal>
   );
@@ -260,7 +268,9 @@ function PaginationBar({
         onPress={onPrev}
         disabled={page === 0 || loading}
       >
-        <Text style={[styles.pageBtnText, page === 0 && styles.pageBtnTextDisabled]}>
+        <Text
+          style={[styles.pageBtnText, page === 0 && styles.pageBtnTextDisabled]}
+        >
           ← Prev
         </Text>
       </TouchableOpacity>
@@ -274,7 +284,9 @@ function PaginationBar({
         onPress={onNext}
         disabled={!hasMore || loading}
       >
-        <Text style={[styles.pageBtnText, !hasMore && styles.pageBtnTextDisabled]}>
+        <Text
+          style={[styles.pageBtnText, !hasMore && styles.pageBtnTextDisabled]}
+        >
           Next →
         </Text>
       </TouchableOpacity>
@@ -284,14 +296,18 @@ function PaginationBar({
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
-export default function Images() {
-  const [records, setRecords] = useState<ContentRecord[]>([]);
+export default function OfflineImages() {
+  const router = useRouter();
+  const [records, setRecords] = useState<OfflineRecord[]>([]);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<ContentRecord | null>(null);
+  const [selected, setSelected] = useState<OfflineRecord | null>(null);
+  const [uploadConfirming, setUploadConfirming] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const load = useCallback(async (p: number, isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -299,11 +315,12 @@ export default function Images() {
     setError(null);
 
     try {
-      const result = await fetchImages(p);
+      const result = await fetchOfflineRecords(p);
       setRecords(result.data ?? []);
-      setHasMore((result.data?.length ?? 0) >= result.pageSize);
+      setTotal(result.total);
+      setHasMore((p + 1) * PAGE_SIZE < result.total);
     } catch (e: any) {
-      setError(e.message ?? "Failed to load images.");
+      setError(e.message ?? "Failed to load offline images.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -318,14 +335,35 @@ export default function Images() {
   const handlePrev = () => setPage((p) => Math.max(0, p - 1));
   const handleNext = () => setPage((p) => p + 1);
 
-  const handleDelete = useCallback(async (contentId: string) => {
+  const handleDelete = useCallback(async (id: string) => {
     try {
-      await deleteImage(contentId);
-      setRecords((prev) => prev.filter((r) => r.contentId !== contentId));
+      await deleteOfflineRecord(id);
+      setRecords((prev) => prev.filter((r) => r.id !== id));
+      setTotal((t) => t - 1);
     } catch (e: any) {
       setError(e.message ?? "Failed to delete.");
     }
   }, []);
+
+  const handleUploadAll = async () => {
+    if (!uploadConfirming) {
+      setUploadConfirming(true);
+      return;
+    }
+    setUploadConfirming(false);
+    setUploading(true);
+    try {
+      await uploadAllRecords();
+    } catch (e: any) {
+      setError(e.message ?? "Upload failed.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleCancelConfirm = () => {
+    if (uploadConfirming) setUploadConfirming(false);
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -333,10 +371,40 @@ export default function Images() {
 
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Images</Text>
-        {records.length > 0 && (
-          <Text style={styles.headerSub}>{records.length} records</Text>
-        )}
+        {/* <TouchableOpacity
+          onPress={() => router.back()}
+          style={styles.backBtn}
+          onPressIn={handleCancelConfirm}
+        >
+          <Ionicons name="arrow-back" size={24} color="#1A1A2E" />
+        </TouchableOpacity>
+
+        <Text style={styles.headerTitle}>Offline Images</Text> */}
+
+        <View style={styles.headerRight}>
+          {total > 0 && (
+            <View style={styles.countBadge}>
+              <Text style={styles.countBadgeText}>{total}</Text>
+            </View>
+          )}
+          <TouchableOpacity
+            style={[
+              styles.uploadAllBtn,
+              uploadConfirming && styles.uploadAllBtnConfirm,
+              (uploading || total === 0) && styles.uploadAllBtnDisabled,
+            ]}
+            onPress={handleUploadAll}
+            disabled={uploading || total === 0}
+          >
+            {uploading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.uploadAllBtnText}>
+                {uploadConfirming ? "Confirm?" : "⬆ Upload All"}
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Error */}
@@ -358,11 +426,12 @@ export default function Images() {
       ) : (
         <FlatList
           data={records}
-          keyExtractor={(item) => item.contentId}
+          keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <ImageCard item={item} onPress={setSelected} onDelete={handleDelete} />
           )}
           contentContainerStyle={styles.list}
+          onScrollBeginDrag={handleCancelConfirm}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -373,8 +442,15 @@ export default function Images() {
           ListEmptyComponent={
             !loading ? (
               <View style={styles.centered}>
-                <Text style={styles.emptyIcon}>📭</Text>
-                <Text style={styles.emptyText}>No images found</Text>
+                <Ionicons
+                  name="cloud-offline-outline"
+                  size={56}
+                  color="#DDDDE8"
+                />
+                <Text style={styles.emptyText}>No offline images found</Text>
+                <Text style={styles.emptySubtext}>
+                  Images saved while offline will appear here.
+                </Text>
               </View>
             ) : null
           }
@@ -417,25 +493,62 @@ const styles = StyleSheet.create({
   // Header
   header: {
     flexDirection: "row",
-    alignItems: "baseline",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
+    alignItems: "center",
+    paddingHorizontal: 16,
     paddingTop: Platform.OS === "android" ? 16 : 8,
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: BORDER,
     backgroundColor: BG,
+    gap: 10,
+  },
+  backBtn: {
+    padding: 2,
   },
   headerTitle: {
-    fontSize: 26,
+    fontSize: 22,
     fontWeight: "800",
     color: ACCENT,
     letterSpacing: -0.5,
+    flex: 1,
   },
-  headerSub: {
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  countBadge: {
+    backgroundColor: TEAL,
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    minWidth: 28,
+    alignItems: "center",
+  },
+  countBadgeText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  uploadAllBtn: {
+    backgroundColor: ACCENT,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 8,
+    minWidth: 70,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  uploadAllBtnConfirm: {
+    backgroundColor: "#E07B0F",
+  },
+  uploadAllBtnDisabled: {
+    backgroundColor: "#DDDDE8",
+  },
+  uploadAllBtnText: {
+    color: "#fff",
+    fontWeight: "700",
     fontSize: 13,
-    color: MUTED,
-    fontWeight: "500",
   },
 
   // Error
@@ -476,18 +589,35 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BORDER,
   },
-  deleteBtn: {
+  cardActions: {
     flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "flex-end",
+    justifyContent: "flex-end",
+    gap: 8,
     margin: 10,
     marginBottom: 4,
+  },
+  uploadBtn: {
+    backgroundColor: TEAL,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 8,
+    minWidth: 90,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  uploadBtnText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 13,
+  },
+  deleteBtn: {
     backgroundColor: "#E03E3E",
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: 8,
     minWidth: 90,
     justifyContent: "center",
+    alignItems: "center",
   },
   deleteBtnText: {
     color: "#fff",
@@ -522,6 +652,21 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   dateBadgeText: { color: "#fff", fontSize: 11, fontWeight: "600" },
+  offlineBadge: {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    backgroundColor: "#E07B0F",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  offlineBadgeText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+  },
 
   // Patient Card
   patientCard: {
@@ -675,10 +820,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 8,
   },
-  emptyIcon: { fontSize: 40 },
   emptyText: {
+    fontSize: 16,
+    fontWeight: "600",
     color: MUTED,
-    fontSize: 15,
-    fontWeight: "500",
+  },
+  emptySubtext: {
+    fontSize: 13,
+    color: "#BBBBCC",
+    textAlign: "center",
+    paddingHorizontal: 24,
   },
 });

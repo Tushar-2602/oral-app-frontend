@@ -25,8 +25,7 @@ export default function Home() {
       const refreshToken = await TokenService.getRefresh();
 
       if (!refreshToken) {
-        // No token found, just clear and redirect
-       TokenService.clear();
+        TokenService.clear();
         router.replace("/");
         return;
       }
@@ -39,17 +38,14 @@ export default function Home() {
 
       const data = await response.json();
 
-      // Clear tokens locally regardless of backend response
       TokenService.clear();
 
       if (!response.ok && response.status !== 404) {
-        // 404 = already logged out on server side, still fine to proceed
         console.warn("Logout warning:", data.message);
       }
     } catch (err) {
       console.error("Logout error:", err);
-      // Still clear tokens and redirect even on network error
-     TokenService.clear();
+      TokenService.clear();
     } finally {
       router.replace("/");
     }
@@ -61,6 +57,15 @@ export default function Home() {
       { text: "Cancel", style: "cancel", onPress: () => setDrawerOpen(true) },
       { text: "Logout", style: "destructive", onPress: handleLogout },
     ]);
+  };
+
+  const handleDownloadAllImages = () => {
+    setDrawerOpen(false);
+    Alert.alert(
+      "Download All Images",
+      "Download functionality will be implemented here.",
+      [{ text: "OK", style: "default" }]
+    );
   };
 
   return (
@@ -87,6 +92,27 @@ export default function Home() {
                 >
                   <Ionicons name="images-outline" size={22} color="#333" />
                   <Text style={styles.drawerItemText}>See Images</Text>
+                </TouchableOpacity>
+
+                {/* ✅ NEW: See Offline Images */}
+                <TouchableOpacity
+                  style={styles.drawerItem}
+                  onPress={() => {
+                    setDrawerOpen(false);
+                    router.push("/offline-images");
+                  }}
+                >
+                  <Ionicons name="cloud-offline-outline" size={22} color="#333" />
+                  <Text style={styles.drawerItemText}>See Offline Images</Text>
+                </TouchableOpacity>
+
+                {/* Download All Images */}
+                <TouchableOpacity
+                  style={styles.drawerItem}
+                  onPress={handleDownloadAllImages}
+                >
+                  <Ionicons name="download-outline" size={22} color="#333" />
+                  <Text style={styles.drawerItemText}>Download All Images</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -165,7 +191,6 @@ const styles = StyleSheet.create({
     color: "green",
   },
 
-  // Drawer styles
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.4)",
@@ -204,7 +229,6 @@ const styles = StyleSheet.create({
     color: "#333",
   },
 
-  // Logout pinned to bottom
   logoutItem: {
     flexDirection: "row",
     alignItems: "center",

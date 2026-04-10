@@ -1,7 +1,9 @@
 import * as ImageManipulator from "expo-image-manipulator";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { File } from "expo-file-system/next";
+import { File, Directory, Paths } from "expo-file-system/next";
+import * as SQLite from "expo-sqlite";
+import * as Crypto from "expo-crypto";
 import {
   Alert,
   Image,
@@ -12,8 +14,23 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { usePatientStore } from "@/store/patientStore"; // adjust path as needed
+import { usePatientStore } from "@/store/patientStore";
 import { API_URL, TokenService } from "./index";
+
+// Module-level singleton — opened once, reused forever
+let dbInstance: SQLite.SQLiteDatabase | null = null;
+
+export const getDb = async () => {
+  if (dbInstance) return dbInstance;
+  dbInstance = await SQLite.openDatabaseAsync("app.db");
+  await dbInstance.execAsync(`
+    CREATE TABLE IF NOT EXISTS saved_records (
+      id TEXT PRIMARY KEY NOT NULL,
+      data TEXT NOT NULL
+    );
+  `);
+  return dbInstance;
+};
 
 export default function ThirdScreen() {
   const { uri } = useLocalSearchParams();
@@ -107,7 +124,65 @@ export default function ThirdScreen() {
     });
   };
 
- const handleUpload = async () => {
+  const handleSaveToDevice = async () => {
+    if (!displayUri) {
+      Alert.alert("Error", "No image to save.");
+      return;
+    }
+
+    try {
+      // 1. Generate UUID
+      const id = Crypto.randomUUID();
+
+      // 2. Ensure permanent directory exists
+      const savedImagesDir = new Directory(Paths.document, "saved_images");
+      if (!savedImagesDir.exists) {
+        savedImagesDir.create();
+      }
+
+      // 3. Copy image file to permanent storage
+      const sourceFile = new File(displayUri);
+      const destFile = new File(savedImagesDir, `${id}.jpg`);
+      sourceFile.copy(destFile);
+
+      const permanentUri = destFile.uri;
+      const size = sourceFile.size ?? 0;
+
+      // 4. Build data payload (no tokens)
+      const data = JSON.stringify({
+        uri: permanentUri,
+        size,
+        fileName: `${id}.jpg`,
+        fileType: "image/jpeg",
+        patientName: patient.name,
+        patientAge: patient.age,
+        patientId: patient.patientId,
+        patientDescription: patient.description,
+        patientQrData: patient.qrData,
+        hospitalName: patient.hospital,
+        attendantDescription: description,
+        savedAt: new Date().toISOString(),
+      });
+
+      // 5. Insert into SQLite
+      const db = await getDb();
+      await db.runAsync(
+        "INSERT INTO saved_records (id, data) VALUES (?, ?);",
+        id,
+        data
+      );
+      
+        const rows = await db.getAllAsync("SELECT * FROM saved_records;");
+  console.log(JSON.stringify(rows, null, 2));
+      
+      Alert.alert("Saved", "Record saved to device successfully.");
+    } catch (error: any) {
+      console.error("Save error:", error);
+      Alert.alert("Error", error.message ?? "Failed to save. Please try again.");
+    }
+  };
+
+  const handleUpload = async () => {
     if (!displayUri) {
       Alert.alert("Error", "No image to upload.");
       return;
@@ -121,8 +196,8 @@ export default function ThirdScreen() {
       const fileName = displayUri.split("/").pop() ?? `image_${Date.now()}.jpg`;
       const fileType = "image/jpeg";
 
-     const file = new File(displayUri);
-const size = file.size ?? 0;
+      const file = new File(displayUri);
+      const size = file.size ?? 0;
 
       const backendResponse = await fetch(`${API_URL}/content/uploadRequest`, {
         method: "POST",
@@ -138,21 +213,20 @@ const size = file.size ?? 0;
           hospitalName: patient.hospital,
           attendantDescription: description,
           size,
-          accessToken,   // ← sending tokens
+          accessToken,
           refreshToken,
         }),
       });
-console.log(patient);
+      console.log(patient);
 
       if (!backendResponse.ok) {
         throw new Error(`Backend error: ${backendResponse.status}`);
       }
 
       const resp = await backendResponse.json();
-      const data=resp.data;
+      const data = resp.data;
       console.log(data);
-      
-      // Save new tokens if backend rotated them
+
       if (data.newAccessToken && data.newRefreshToken) {
         await TokenService.save(data.newAccessToken, data.newRefreshToken);
       }
@@ -183,6 +257,9 @@ console.log(patient);
       }
 
       Alert.alert("Success", "Uploaded successfully!");
+      setTimeout(() => {
+        router.replace("/home");
+      }, 2000);
     } catch (error: any) {
       console.error("Upload error:", error);
       Alert.alert("Error", error.message ?? "Upload failed. Please try again.");
@@ -229,6 +306,10 @@ console.log(patient);
         disabled={uploading}
       >
         <Text style={styles.buttonText}>{uploading ? "Uploading..." : "Upload"}</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.saveButton} onPress={handleSaveToDevice}>
+        <Text style={styles.saveButtonText}>Save to Device</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -326,6 +407,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 10,
   },
+  saveButton: {
+    backgroundColor: "#2e7d32",
+    width: 300,
+    paddingVertical: 12,
+    borderRadius: 5,
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  saveButtonText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
   rejectButton: {
     backgroundColor: "#ccc",
     width: 300,
